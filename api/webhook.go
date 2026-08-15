@@ -7,17 +7,18 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
-// --- Telegram Bot API 9.4 Structs ---
+// --- Telegram Bot API 9.4 Structs (دعم الأزرار الملونة) ---
 
 type InlineKeyboardButton struct {
 	Text              string `json:"text"`
 	CallbackData      string `json:"callback_data,omitempty"`
 	URL               string `json:"url,omitempty"`
-	Style             string `json:"style,omitempty"` // "primary" (blue), "success" (green), "danger" (red)
+	Style             string `json:"style,omitempty"` // "primary" (أزرق), "success" (أخضر), "danger" (أحمر)
 	IconCustomEmojiID string `json:"icon_custom_emoji_id,omitempty"`
 }
 
@@ -28,20 +29,17 @@ type InlineKeyboardMarkup struct {
 type User struct {
 	ID        int64  `json:"id"`
 	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name,omitempty"`
 	Username  string `json:"username,omitempty"`
 }
 
 type Chat struct {
-	ID   int64  `json:"id"`
-	Type string `json:"type"`
+	ID int64 `json:"id"`
 }
 
 type Message struct {
 	MessageID int                   `json:"message_id"`
 	From      *User                 `json:"from"`
 	Chat      Chat                  `json:"chat"`
-	Date      int                   `json:"date"`
 	Text      string                `json:"text,omitempty"`
 	Caption   string                `json:"caption,omitempty"`
 	ReplyTo   *Message              `json:"reply_to_message,omitempty"`
@@ -61,58 +59,7 @@ type Update struct {
 	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
 }
 
-// --- Dynamic Storage / KV Integration (Upstash / Redis REST API) ---
-
-func getEnv(key, defaultValue string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultValue
-}
-
-func kvCommand(cmd ...string) ([]byte, error) {
-	kvURL := os.Getenv("KV_REST_API_URL")
-	kvToken := os.Getenv("KV_REST_API_TOKEN")
-	if kvURL == "" || kvToken == "" {
-		return nil, fmt.Errorf("KV database not configured")
-	}
-
-	req, err := http.NewRequest("POST", kvURL, bytes.NewBuffer([]byte(strings.Join(cmd, "/"))))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+kvToken)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
-
-func isBanned(userID int64) bool {
-	res, err := kvCommand("SISMEMBER", "banned_users", strconv.FormatInt(userID, 10))
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(res), "1")
-}
-
-func addUser(userID int64) {
-	_, _ = kvCommand("SADD", "all_users", strconv.FormatInt(userID, 10))
-}
-
-func banUser(userID int64) {
-	_, _ = kvCommand("SADD", "banned_users", strconv.FormatInt(userID, 10))
-}
-
-func unbanUser(userID int64) {
-	_, _ = kvCommand("SREM", "banned_users", strconv.FormatInt(userID, 10))
-}
-
-// --- Telegram API Helper Methods ---
+// --- Telegram API Helpers ---
 
 func sendTelegramRequest(method string, payload interface{}) ([]byte, error) {
 	token := os.Getenv("BOT_TOKEN")
@@ -164,35 +111,51 @@ func answerCallbackQuery(callbackQueryID, text string) {
 	_, _ = sendTelegramRequest("answerCallbackQuery", payload)
 }
 
-// --- Admin Keyboard (Bot API 9.4 Styled Buttons) ---
+// استخراج آيدي العميل عند قيام الآدمن بالرد (Reply)
+func extractUserIDFromReply(msg *Message) int64 {
+	if msg == nil {
+		return 0
+	}
+	text := msg.Text
+	if text == "" {
+		text = msg.Caption
+	}
 
+	re := regexp.MustCompile(`🆔 ID: <code>(\d+)</code>`)
+	matches := re.FindStringSubmatch(text)
+	if len(matches) > 1 {
+		id, err := strconv.ParseInt(matches[1], 10, 64)
+		if err == nil {
+			return id
+		}
+	}
+	return 0
+}
+
+// --- تصميم الأزرار الملونة (Bot API 9.4) ---
+
+// لوحة المطور
 func buildAdminPanelKeyboard() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
-				{Text: "📊 الإحصائيات", CallbackData: "admin_stats", Style: "primary"},
-				{Text: "📢 إذاعة للجميع", CallbackData: "admin_broadcast", Style: "success"},
+				{Text: "🟢 الحالة: مفعّل", CallbackData: "status_active", Style: "success"},
+				{Text: "ℹ️ تعليمات الاستخدام", CallbackData: "admin_help", Style: "primary"},
 			},
 			{
-				{Text: "⚙️ إعدادات التواصل", CallbackData: "admin_settings", Style: "primary"},
-				{Text: "🚫 قائمة المحظورين", CallbackData: "admin_banned", Style: "danger"},
-			},
-			{
-				{Text: "🔒 وضع الصيانة", CallbackData: "admin_maintenance", Style: "danger", IconCustomEmojiID: "5373141891321699086"},
+				{Text: "⚠️ إغلاق المؤقت", CallbackData: "close_temp", Style: "danger", IconCustomEmojiID: "5373141891321699086"},
 			},
 		},
 	}
 }
 
-func buildMessageActionKeyboard(userID int64) *InlineKeyboardMarkup {
+// الأزرار المرفقة أسفل كل رسالة عميل تصل للآدمن
+func buildUserActionKeyboard(userID int64) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
-				{Text: "💬 رد مباشر", CallbackData: fmt.Sprintf("reply_%d", userID), Style: "success"},
-				{Text: "👤 ملف المستخدم", CallbackData: fmt.Sprintf("info_%d", userID), Style: "primary"},
-			},
-			{
-				{Text: "🔴 حظر المستخدم", CallbackData: fmt.Sprintf("ban_%d", userID), Style: "danger"},
+				{Text: "💬 كيفية الرد", CallbackData: fmt.Sprintf("how_reply_%d", userID), Style: "success"},
+				{Text: "👤 آيدي العميل", CallbackData: fmt.Sprintf("info_%d", userID), Style: "primary"},
 			},
 		},
 	}
@@ -203,7 +166,7 @@ func buildMessageActionKeyboard(userID int64) *InlineKeyboardMarkup {
 func Handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Livegram Clone Bot is Running on Vercel!"))
+		w.Write([]byte("Tawasl Bot with Styled Buttons is Running!"))
 		return
 	}
 
@@ -221,37 +184,27 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	adminID, _ := strconv.ParseInt(os.Getenv("ADMIN_ID"), 10, 64)
 
-	// Handling Callbacks (Inline Buttons)
+	// 1. معالجة ضغطات الأزرار (Callback Queries)
 	if update.CallbackQuery != nil {
 		cb := update.CallbackQuery
 		if cb.From.ID == adminID {
 			handleAdminCallbacks(cb, adminID)
 		} else {
-			answerCallbackQuery(cb.ID, "غير مسموح لك باستخدام هذه الأزرار.")
+			answerCallbackQuery(cb.ID, "هذه الأزرار مخصصة لإدارة البوت فقط.")
 		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// Handling Incoming Messages
+	// 2. معالجة الرسائل الواردة
 	if update.Message != nil {
 		msg := update.Message
 		userID := msg.From.ID
 
-		// Record User
-		addUser(userID)
-
-		// Check Ban Status
-		if isBanned(userID) && userID != adminID {
-			sendMessage(userID, "⚠️ تم حظرك من استخدام هذا البوت.", nil)
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		// Process Command /start
+		// أمر التشغيل /start
 		if msg.Text == "/start" {
 			if userID == adminID {
-				sendMessage(adminID, "<b>مرحباً بك في لوحة تحكم المطور 🛠️</b>\nيمكنك التحكم بكافة خيارات البوت عبر الأزرار أدناه:", buildAdminPanelKeyboard())
+				sendMessage(adminID, "<b>لوحة تحكم المطور 🛠️</b>\n\nتعتمد الأزرار أدناه أحدث تنسيقات Bot API 9.4 (الألوان والرموز المخصصة):", buildAdminPanelKeyboard())
 			} else {
 				sendMessage(userID, "مرحباً بك! أرسل رسالتك أو وسائطك وسيقوم الدعم الفني بالرد عليك في أقرب وقت.", nil)
 			}
@@ -259,37 +212,39 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Admin Commands
+		// رد المطور على رسالة العميل
 		if userID == adminID {
-			if msg.Text == "/admin" || msg.Text == "لوحة التحكم" {
-				sendMessage(adminID, "<b>لوحة تحكم الأدمن الشاملة:</b>", buildAdminPanelKeyboard())
+			if msg.Text == "/admin" {
+				sendMessage(adminID, "<b>لوحة تحكم المطور:</b>", buildAdminPanelKeyboard())
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 
-			// Admin replying to forwarded/copied message
 			if msg.ReplyTo != nil {
-				// Detect target user ID from admin reply or database state
-				// (Assuming simple forward relay architecture)
-				sendMessage(adminID, "✅ تم إرسال الرد بنجاح للعميل.", nil)
+				targetUserID := extractUserIDFromReply(msg.ReplyTo)
+				if targetUserID != 0 {
+					copyMessage(targetUserID, adminID, msg.MessageID, nil)
+					sendMessage(adminID, "✅ تم تحويل الرد بنجاح إلى العميل.", nil)
+				} else {
+					sendMessage(adminID, "⚠️ تعذر التعرف على آيدي العميل. يرجى عمل Reply على الهيدر الذي يحتوي على <code>🆔 ID:</code>.", nil)
+				}
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 		}
 
-		// User Messages -> Relay to Admin
+		// تحويل رسائل العملاء إلى المطور
 		if userID != adminID {
-			// Notify Admin and Copy full media/formatting
-			headerText := fmt.Sprintf("📩 <b>رسالة جديدة من:</b> %s (<code>%d</code>)", msg.From.FirstName, userID)
+			header := fmt.Sprintf("📩 <b>رسالة جديدة من العميل:</b>\n👤 <b>الاسم:</b> %s\n🆔 ID: <code>%d</code>", msg.From.FirstName, userID)
 			if msg.From.Username != "" {
-				headerText += fmt.Sprintf(" | @%s", msg.From.Username)
+				header += fmt.Sprintf("\n🔗 <b>المعرف:</b> @%s", msg.From.Username)
 			}
-			sendMessage(adminID, headerText, nil)
 
-			// Copy message with full media & formatting support
-			copyMessage(adminID, msg.Chat.ID, msg.MessageID, buildMessageActionKeyboard(userID))
+			// إرسال الهيدر ثم نقل الوسائط/الرسالة مع الأزرار الملونة
+			sendMessage(adminID, header, buildUserActionKeyboard(userID))
+			copyMessage(adminID, msg.Chat.ID, msg.MessageID, nil)
 
-			// Confirmation to User
+			// تأكيد للعميل
 			sendMessage(userID, "✅ تم استلام رسالتك بنجاح، سيتم الرد عليك قريباً.", nil)
 		}
 	}
@@ -301,22 +256,17 @@ func handleAdminCallbacks(cb *CallbackQuery, adminID int64) {
 	data := cb.Data
 
 	switch {
-	case data == "admin_stats":
-		answerCallbackQuery(cb.ID, "جاري إحضار الإحصائيات...")
-		sendMessage(adminID, "📊 <b>إحصائيات البوت الحية:</b>\n\n• إجمالي المستخدِمين: 1,248\n• المحظورون: 12\n• حالة التواصل: 🟢 مفعّل", buildAdminPanelKeyboard())
+	case data == "status_active":
+		answerCallbackQuery(cb.ID, "🟢 البوت يعمل بكفاءة وبشكل مباشر على Vercel.")
 
-	case data == "admin_broadcast":
-		answerCallbackQuery(cb.ID, "أرسل الرسالة أو الوسائط التي تريد إعادتها للجميع.")
+	case data == "admin_help":
+		answerCallbackQuery(cb.ID, "للرد على أي عميل: قم بعمل Reply على رسالة التنبيه المكتوب فيها آيدي العميل.")
 
-	case strings.HasPrefix(data, "ban_"):
-		targetIDStr := strings.TrimPrefix(data, "ban_")
-		targetID, _ := strconv.ParseInt(targetIDStr, 10, 64)
-		banUser(targetID)
-		answerCallbackQuery(cb.ID, fmt.Sprintf("تم حظر المستخدم %d بنجاح", targetID))
+	case strings.HasPrefix(data, "how_reply_"):
+		answerCallbackQuery(cb.ID, "اضغط رد (Reply) على رسالة التنبيه العلوية واكتب ردك مباشرة.")
 
 	case strings.HasPrefix(data, "info_"):
-		targetIDStr := strings.TrimPrefix(data, "info_")
-		sendMessage(adminID, fmt.Sprintf("👤 <b>معلومات المستخدم:</b>\n• ID: <code>%s</code>", targetIDStr), nil)
-		answerCallbackQuery(cb.ID, "تم عرض التفاصيل")
+		targetID := strings.TrimPrefix(data, "info_")
+		answerCallbackQuery(cb.ID, fmt.Sprintf("آيدي العميل: %s", targetID))
 	}
 }
