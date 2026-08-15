@@ -18,7 +18,7 @@ type InlineKeyboardButton struct {
 	Text              string `json:"text"`
 	CallbackData      string `json:"callback_data,omitempty"`
 	URL               string `json:"url,omitempty"`
-	Style             string `json:"style,omitempty"` // "primary", "success", "danger"
+	Style             string `json:"style,omitempty"` // "primary" (أزرق), "success" (أخضر), "danger" (أحمر)
 	IconCustomEmojiID string `json:"icon_custom_emoji_id,omitempty"`
 }
 
@@ -37,13 +37,14 @@ type Chat struct {
 }
 
 type Message struct {
-	MessageID int                   `json:"message_id"`
-	From      *User                 `json:"from"`
-	Chat      Chat                  `json:"chat"`
-	Text      string                `json:"text,omitempty"`
-	Caption   string                `json:"caption,omitempty"`
-	ReplyTo   *Message              `json:"reply_to_message,omitempty"`
-	Markup    *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+	MessageID    int                   `json:"message_id"`
+	From         *User                 `json:"from"`
+	Chat         Chat                  `json:"chat"`
+	Text         string                `json:"text,omitempty"`
+	Caption      string                `json:"caption,omitempty"`
+	MediaGroupID string                `json:"media_group_id,omitempty"` // دعم الألبومات
+	ReplyTo      *Message              `json:"reply_to_message,omitempty"`
+	Markup       *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 }
 
 type CallbackQuery struct {
@@ -90,6 +91,7 @@ func sendMessage(chatID int64, text string, keyboard *InlineKeyboardMarkup) {
 	_, _ = sendTelegramRequest("sendMessage", payload)
 }
 
+// نسخ الرسائل والوسائط بالكامل مع الحفاظ على التنسيقات والألبومات
 func copyMessage(toChatID, fromChatID int64, messageID int, keyboard *InlineKeyboardMarkup) {
 	payload := map[string]interface{}{
 		"chat_id":      toChatID,
@@ -111,7 +113,7 @@ func answerCallbackQuery(callbackQueryID, text string) {
 	_, _ = sendTelegramRequest("answerCallbackQuery", payload)
 }
 
-// استخراج آيدي العميل بشكل صحيح
+// استخراج آيدي العميل الموجه له الرد
 func extractUserIDFromReply(msg *Message) int64 {
 	if msg == nil {
 		return 0
@@ -132,14 +134,14 @@ func extractUserIDFromReply(msg *Message) int64 {
 	return 0
 }
 
-// --- تصميم الأزرار الملونة ---
+// --- لوحات التحكم والأزرار الملونة ---
 
 func buildAdminPanelKeyboard() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
-				{Text: "🟢 الحالة: مفعّل", CallbackData: "status_active", Style: "success"},
-				{Text: "ℹ️ تعليمات الاستخدام", CallbackData: "admin_help", Style: "primary"},
+				{Text: "🟢 الخدمة مفعّلة", CallbackData: "status_active", Style: "success"},
+				{Text: "ℹ️ دليل الوسائط", CallbackData: "media_info", Style: "primary"},
 			},
 		},
 	}
@@ -149,7 +151,7 @@ func buildUserActionKeyboard(userID int64) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
-				{Text: "💬 كيفية الرد", CallbackData: fmt.Sprintf("how_reply_%d", userID), Style: "success"},
+				{Text: "💬 رد على الرسالة", CallbackData: fmt.Sprintf("how_reply_%d", userID), Style: "success"},
 				{Text: "👤 آيدي العميل", CallbackData: fmt.Sprintf("info_%d", userID), Style: "primary"},
 			},
 		},
@@ -161,7 +163,7 @@ func buildUserActionKeyboard(userID int64) *InlineKeyboardMarkup {
 func Handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Tawasl Bot is Running!"))
+		w.Write([]byte("Tawasl Bot with Full Media Support is Running!"))
 		return
 	}
 
@@ -179,31 +181,35 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	adminID, _ := strconv.ParseInt(os.Getenv("ADMIN_ID"), 10, 64)
 
+	// 1. معالجة التفاعل مع الأزرار الشفافة
 	if update.CallbackQuery != nil {
 		cb := update.CallbackQuery
 		if cb.From.ID == adminID {
 			handleAdminCallbacks(cb, adminID)
 		} else {
-			answerCallbackQuery(cb.ID, "هذه الأزرار مخصصة لإدارة البوت فقط.")
+			answerCallbackQuery(cb.ID, "الأزرار مخصصة للإدارة فقط.")
 		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
+	// 2. معالجة الرسائل والوسائط الواردة
 	if update.Message != nil {
 		msg := update.Message
 		userID := msg.From.ID
 
+		// أمر البدء /start
 		if msg.Text == "/start" {
 			if userID == adminID {
-				sendMessage(adminID, "<b>لوحة تحكم المطور 🛠️</b>", buildAdminPanelKeyboard())
+				sendMessage(adminID, "<b>لوحة تحكم المطور 🛠️</b>\nالبوت جاهز لاستقبال ونقل جميع أنواع الوسائط والألبومات.", buildAdminPanelKeyboard())
 			} else {
-				sendMessage(userID, "مرحباً بك! أرسل رسالتك وسيقوم الدعم الفني بالرد عليك في أقرب وقت.", nil)
+				sendMessage(userID, "مرحباً بك! يمكنك إرسال الرسائل، الصور، الفيديوهات، الملفات، أو البصمات الصوتية وسيقوم الدعم الفني بالرد عليك.", nil)
 			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
+		// رد المطور على العميل
 		if userID == adminID {
 			if msg.Text == "/admin" {
 				sendMessage(adminID, "<b>لوحة تحكم المطور:</b>", buildAdminPanelKeyboard())
@@ -214,8 +220,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			if msg.ReplyTo != nil {
 				targetUserID := extractUserIDFromReply(msg.ReplyTo)
 				if targetUserID != 0 {
+					// إرسال وسائط أو نصوص المطور إلى العميل مباشرة
 					copyMessage(targetUserID, adminID, msg.MessageID, nil)
-					sendMessage(adminID, "✅ تم تحويل الرد بنجاح إلى العميل.", nil)
+					sendMessage(adminID, "✅ تم تحويل الرد/الوسائط إلى العميل بنجاح.", nil)
 				} else {
 					sendMessage(adminID, "⚠️ تعذر التعرف على آيدي العميل. يرجى عمل Reply على الهيدر الذي يحتوي على 🆔 ID:.", nil)
 				}
@@ -224,16 +231,24 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// تحويل رسائل ووسائط العملاء إلى المطور
 		if userID != adminID {
 			header := fmt.Sprintf("📩 <b>رسالة جديدة من العميل:</b>\n👤 <b>الاسم:</b> %s\n🆔 ID: <code>%d</code>", msg.From.FirstName, userID)
 			if msg.From.Username != "" {
 				header += fmt.Sprintf("\n🔗 <b>المعرف:</b> @%s", msg.From.Username)
 			}
+			if msg.MediaGroupID != "" {
+				header += "\n📦 <b>نوع المرفق:</b> ألبوم وسائط (Media Group)"
+			}
 
+			// إرسال الهيدر مع أزرار التحكم
 			sendMessage(adminID, header, buildUserActionKeyboard(userID))
+
+			// نقل النص أو الميديا الخاصة بالعميل مع الحفاظ على التسميات والشكل الأصلي
 			copyMessage(adminID, msg.Chat.ID, msg.MessageID, nil)
 
-			sendMessage(userID, "✅ تم استلام رسالتك بنجاح، سيتم الرد عليك قريباً.", nil)
+			// تأكيد الاستلام للعميل
+			sendMessage(userID, "✅ تم استلام رسالتك/وسائطك بنجاح، سيتم الرد عليك قريباً.", nil)
 		}
 	}
 
@@ -245,13 +260,13 @@ func handleAdminCallbacks(cb *CallbackQuery, adminID int64) {
 
 	switch {
 	case data == "status_active":
-		answerCallbackQuery(cb.ID, "🟢 البوت يعمل بكفاءة على Vercel.")
+		answerCallbackQuery(cb.ID, "🟢 البوت متصل ويدعم نقل الصور، الفيديوهات، الصوتیات، والملفات.")
 
-	case data == "admin_help":
-		answerCallbackQuery(cb.ID, "قم بعمل Reply على رسالة التنبيه التي تحتوي على آيدي العميل.")
+	case data == "media_info":
+		answerCallbackQuery(cb.ID, "للرد بأي وسائط (صورة، صوت، فيديو): اختر Reply على الهيدر وأرسل الميديا مباشرة.")
 
 	case strings.HasPrefix(data, "how_reply_"):
-		answerCallbackQuery(cb.ID, "اضغط رد (Reply) على رسالة الهيدر واكتب ردك مباشرة.")
+		answerCallbackQuery(cb.ID, "قم بعمل Reply على الهيدر العلوي وأرسل إجابتك.")
 
 	case strings.HasPrefix(data, "info_"):
 		targetID := strings.TrimPrefix(data, "info_")
