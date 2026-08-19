@@ -12,13 +12,13 @@ import (
 	"strings"
 )
 
-// --- Telegram Bot API 9.4 Structs ---
+// --- Telegram Bot API Structs ---
 
 type InlineKeyboardButton struct {
 	Text              string `json:"text"`
 	CallbackData      string `json:"callback_data,omitempty"`
 	URL               string `json:"url,omitempty"`
-	Style             string `json:"style,omitempty"` // "primary" (أزرق), "success" (أخضر), "danger" (أحمر)
+	Style             string `json:"style,omitempty"` // "primary", "success", "danger"
 	IconCustomEmojiID string `json:"icon_custom_emoji_id,omitempty"`
 }
 
@@ -37,14 +37,13 @@ type Chat struct {
 }
 
 type Message struct {
-	MessageID    int                   `json:"message_id"`
-	From         *User                 `json:"from"`
-	Chat         Chat                  `json:"chat"`
-	Text         string                `json:"text,omitempty"`
-	Caption      string                `json:"caption,omitempty"`
-	MediaGroupID string                `json:"media_group_id,omitempty"` // دعم الألبومات
-	ReplyTo      *Message              `json:"reply_to_message,omitempty"`
-	Markup       *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+	MessageID int                   `json:"message_id"`
+	From      *User                 `json:"from"`
+	Chat      Chat                  `json:"chat"`
+	Text      string                `json:"text,omitempty"`
+	Caption   string                `json:"caption,omitempty"`
+	ReplyTo   *Message              `json:"reply_to_message,omitempty"`
+	Markup    *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
 }
 
 type CallbackQuery struct {
@@ -60,7 +59,27 @@ type Update struct {
 	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
 }
 
-// --- Telegram API Helpers ---
+// --- Helper Functions ---
+
+func getAdmins() []int64 {
+	var admins []int64
+	if id1, err := strconv.ParseInt(os.Getenv("ADMIN_ID_1"), 10, 64); err == nil && id1 != 0 {
+		admins = append(admins, id1)
+	}
+	if id2, err := strconv.ParseInt(os.Getenv("ADMIN_ID_2"), 10, 64); err == nil && id2 != 0 {
+		admins = append(admins, id2)
+	}
+	return admins
+}
+
+func isAdmin(userID int64) bool {
+	for _, adminID := range getAdmins() {
+		if userID == adminID {
+			return true
+		}
+	}
+	return false
+}
 
 func sendTelegramRequest(method string, payload interface{}) ([]byte, error) {
 	token := os.Getenv("BOT_TOKEN")
@@ -91,15 +110,24 @@ func sendMessage(chatID int64, text string, keyboard *InlineKeyboardMarkup) {
 	_, _ = sendTelegramRequest("sendMessage", payload)
 }
 
-// نسخ الرسائل والوسائط بالكامل مع الحفاظ على التنسيقات والألبومات
-func copyMessage(toChatID, fromChatID int64, messageID int, keyboard *InlineKeyboardMarkup) {
+func editMessageText(chatID int64, messageID int, text string, keyboard *InlineKeyboardMarkup) {
+	payload := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       text,
+		"parse_mode": "HTML",
+	}
+	if keyboard != nil {
+		payload["reply_markup"] = keyboard
+	}
+	_, _ = sendTelegramRequest("editMessageText", payload)
+}
+
+func copyMessage(toChatID, fromChatID int64, messageID int) {
 	payload := map[string]interface{}{
 		"chat_id":      toChatID,
 		"from_chat_id": fromChatID,
 		"message_id":   messageID,
-	}
-	if keyboard != nil {
-		payload["reply_markup"] = keyboard
 	}
 	_, _ = sendTelegramRequest("copyMessage", payload)
 }
@@ -108,12 +136,11 @@ func answerCallbackQuery(callbackQueryID, text string) {
 	payload := map[string]interface{}{
 		"callback_query_id": callbackQueryID,
 		"text":              text,
-		"show_alert":        true,
+		"show_alert":        false,
 	}
 	_, _ = sendTelegramRequest("answerCallbackQuery", payload)
 }
 
-// استخراج آيدي العميل الموجه له الرد
 func extractUserIDFromReply(msg *Message) int64 {
 	if msg == nil {
 		return 0
@@ -134,26 +161,132 @@ func extractUserIDFromReply(msg *Message) int64 {
 	return 0
 }
 
-// --- لوحات التحكم والأزرار الملونة ---
+func getAdminHeader() string {
+	return `<b>📊 إحصائيات اليوم:</b>
+👥 <b>الاجمالي :</b> 1,250
+🆕 <b>مستخدمون :</b> 34`
+}
 
-func buildAdminPanelKeyboard() *InlineKeyboardMarkup {
+// --- Keyboards Layouts ---
+
+func buildMainPanelKeyboard() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
-				{Text: "🟢 الخدمة مفعّلة", CallbackData: "status_active", Style: "success"},
-				{Text: "ℹ️ دليل الوسائط", CallbackData: "media_info", Style: "primary"},
+				{Text: "⚙️ الإعدادات", CallbackData: "nav_settings", Style: "primary"},
+				{Text: "📝 المحتوى", CallbackData: "nav_content", Style: "primary"},
+			},
+			{
+				{Text: "👥 المستخدمون", CallbackData: "nav_users", Style: "primary"},
+				{Text: "🔐 الاشتراك", CallbackData: "nav_sub", Style: "primary"},
+			},
+			{
+				{Text: "📢 التواصل", CallbackData: "dummy_contact", Style: "primary"},
+				{Text: "💰 المالية", CallbackData: "dummy_finance", Style: "primary"},
+			},
+			{
+				{Text: "🛠️ النظام والدعم", CallbackData: "nav_system", Style: "success"},
+			},
+			{
+				{Text: "❌ إشعار الحظر 🚫", CallbackData: "toggle_ban_notif", Style: "danger"},
+				{Text: "❌ إشعار الدخول 🔔", CallbackData: "toggle_login_notif", Style: "danger"},
+			},
+			{
+				{Text: "❓ دليل الاستخدام", CallbackData: "dummy_guide", Style: "primary"},
+			},
+			{
+				{Text: "• لوحه تحكم في بوت السايت •", CallbackData: "dummy_info", Style: "primary"},
 			},
 		},
 	}
 }
 
-func buildUserActionKeyboard(userID int64) *InlineKeyboardMarkup {
+func buildContentKeyboard() *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: "👋 رسالة الترحيب", CallbackData: "cnt_welcome", Style: "primary"}},
+			{{Text: "💬 الردود التلقائية", CallbackData: "cnt_auto_reply", Style: "primary"}},
+			{
+				{Text: "⚪ الأزرار الشفافة", CallbackData: "cnt_transparent", Style: "primary"},
+				{Text: "✏️ تعديل الأزرار", CallbackData: "cnt_edit_btn", Style: "primary"},
+			},
+			{{Text: "📎 الاختصارات", CallbackData: "cnt_shortcuts", Style: "primary"}},
+			{
+				{Text: "✏️ تعديل المحتوى", CallbackData: "cnt_edit_content", Style: "primary"},
+				{Text: "📋 قائمة التعديلات", CallbackData: "cnt_edit_list", Style: "primary"},
+			},
+			{{Text: "🔗 ديب لينك مخصص (0)", CallbackData: "cnt_deeplink", Style: "primary"}},
+			{{Text: "🌐 الترجمة", CallbackData: "cnt_translate", Style: "primary"}},
+			{{Text: "ℹ️ معلومات البوت", CallbackData: "cnt_bot_info", Style: "primary"}},
+			{{Text: "❓ المساعدة", CallbackData: "cnt_help", Style: "primary"}},
+			{{Text: "• رجوع •", CallbackData: "nav_main", Style: "danger"}},
+		},
+	}
+}
+
+func buildSubscriptionKeyboard() *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: "➕ إضافة اشتراك جديد (0/10)", CallbackData: "sub_add", Style: "success"}},
+			{{Text: "—— الإعدادات ——", CallbackData: "dummy_header1", Style: "primary"}},
+			{{Text: "❌ الإشعار", CallbackData: "sub_notif", Style: "danger"}},
+			{{Text: "—— العرض ——", CallbackData: "dummy_header2", Style: "primary"}},
+			{
+				{Text: "⚪ زر التحقق", CallbackData: "sub_check_btn", Style: "primary"},
+				{Text: "📋 العرض: مجمّعة", CallbackData: "sub_display_type", Style: "primary"},
+			},
+			{
+				{Text: "🎨 النمط ❌", CallbackData: "sub_style", Style: "danger"},
+				{Text: "❌ أيقونة زر التحقق 😀", CallbackData: "sub_icon", Style: "danger"},
+			},
+			{{Text: "✏️ رسالة العرض المُجمَّع", CallbackData: "sub_group_msg", Style: "primary"}},
+			{
+				{Text: "• رجوع •", CallbackData: "nav_main", Style: "danger"},
+				{Text: "❓ شرح القسم", CallbackData: "sub_explain", Style: "primary"},
+			},
+		},
+	}
+}
+
+func buildSettingsKeyboard() *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: "🤖 عمل البوت", CallbackData: "stg_work", Style: "primary"}},
+			{{Text: "🔐 قسم التحقق من العضوية", CallbackData: "stg_membership", Style: "primary"}},
+			{{Text: "🔒 حماية المحتوى", CallbackData: "stg_protection", Style: "primary"}},
+			{{Text: "🔔 الإشعارات", CallbackData: "stg_notifs", Style: "primary"}},
+			{{Text: "🔴 الحذف التلقائي ⏱️", CallbackData: "stg_autodelete", Style: "danger"}},
+			{{Text: "🔴 تذكير غير النشطين 🔔", CallbackData: "stg_remind", Style: "danger"}},
+			{{Text: "📎 ردود سريعة (0)", CallbackData: "stg_quick_replies", Style: "primary"}},
+			{{Text: "• رجوع •", CallbackData: "nav_main", Style: "danger"}},
+		},
+	}
+}
+
+func buildUsersKeyboard() *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{
-				{Text: "💬 رد على الرسالة", CallbackData: fmt.Sprintf("how_reply_%d", userID), Style: "success"},
-				{Text: "👤 آيدي العميل", CallbackData: fmt.Sprintf("info_%d", userID), Style: "primary"},
+				{Text: "📊 الإحصائيات", CallbackData: "usr_stats", Style: "primary"},
+				{Text: "👤 المسؤولون", CallbackData: "usr_admins", Style: "primary"},
 			},
+			{{Text: "🚫 إدارة الحظر", CallbackData: "usr_bans", Style: "danger"}},
+			{{Text: "📋 سجل النشاط", CallbackData: "usr_logs", Style: "primary"}},
+			{{Text: "• رجوع •", CallbackData: "nav_main", Style: "danger"}},
+		},
+	}
+}
+
+func buildSystemKeyboard() *InlineKeyboardMarkup {
+	return &InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: "🛠️ النظام والدعم", CallbackData: "sys_status", Style: "success"}},
+			{
+				{Text: "❌ إشعار الدخول 🔔", CallbackData: "toggle_login_notif", Style: "danger"},
+				{Text: "❌ إشعار الحظر 🚫", CallbackData: "toggle_ban_notif", Style: "danger"},
+			},
+			{{Text: "❓ دليل الاستخدام", CallbackData: "dummy_guide", Style: "primary"}},
+			{{Text: "• رجوع •", CallbackData: "nav_main", Style: "danger"}},
 		},
 	}
 }
@@ -163,7 +296,7 @@ func buildUserActionKeyboard(userID int64) *InlineKeyboardMarkup {
 func Handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Tawasl Bot with Full Media Support is Running!"))
+		w.Write([]byte("Sayat Bot Webhook Running!"))
 		return
 	}
 
@@ -179,97 +312,94 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminID, _ := strconv.ParseInt(os.Getenv("ADMIN_ID"), 10, 64)
-
-	// 1. معالجة التفاعل مع الأزرار الشفافة
+	// 1. معالجة ضغطات الأزرار (Callback Queries)
 	if update.CallbackQuery != nil {
 		cb := update.CallbackQuery
-		if cb.From.ID == adminID {
-			handleAdminCallbacks(cb, adminID)
+		if isAdmin(cb.From.ID) {
+			handleAdminNavigation(cb)
 		} else {
-			answerCallbackQuery(cb.ID, "الأزرار مخصصة للإدارة فقط.")
+			answerCallbackQuery(cb.ID, "هذه اللوحة مخصصة للمشرفين فقط.")
 		}
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// 2. معالجة الرسائل والوسائط الواردة
+	// 2. معالجة الرسائل الواردة
 	if update.Message != nil {
 		msg := update.Message
 		userID := msg.From.ID
 
-		// أمر البدء /start
+		// أمر التشغيل /start
 		if msg.Text == "/start" {
-			if userID == adminID {
-				sendMessage(adminID, "<b>لوحة تحكم المطور 🛠️</b>\nالبوت جاهز لاستقبال ونقل جميع أنواع الوسائط والألبومات.", buildAdminPanelKeyboard())
+			if isAdmin(userID) {
+				sendMessage(userID, getAdminHeader(), buildMainPanelKeyboard())
 			} else {
-				sendMessage(userID, "مرحباً بك! يمكنك إرسال الرسائل، الصور، الفيديوهات، الملفات، أو البصمات الصوتية وسيقوم الدعم الفني بالرد عليك.", nil)
+				sendMessage(userID, "🔒 <b>مرحباً بك في بوت الصراحة والسايت!</b>\nأرسل رسالتك أو ملاحظتك بصراحة وبدون كشف هويتك، وسأوصلها مباشرة إلى الإدارة.", nil)
 			}
 			w.WriteHeader(http.StatusOK)
 			return
 		}
 
-		// رد المطور على العميل
-		if userID == adminID {
+		// التعامل مع المشرفين
+		if isAdmin(userID) {
 			if msg.Text == "/admin" {
-				sendMessage(adminID, "<b>لوحة تحكم المطور:</b>", buildAdminPanelKeyboard())
+				sendMessage(userID, getAdminHeader(), buildMainPanelKeyboard())
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 
+			// عند رد المشرف (Reply) على رسالة العميل
 			if msg.ReplyTo != nil {
 				targetUserID := extractUserIDFromReply(msg.ReplyTo)
 				if targetUserID != 0 {
-					// إرسال وسائط أو نصوص المطور إلى العميل مباشرة
-					copyMessage(targetUserID, adminID, msg.MessageID, nil)
-					sendMessage(adminID, "✅ تم تحويل الرد/الوسائط إلى العميل بنجاح.", nil)
+					copyMessage(targetUserID, userID, msg.MessageID)
+					sendMessage(userID, "✅ تم إرسال ردك إلى العميل بنجاح.", nil)
 				} else {
-					sendMessage(adminID, "⚠️ تعذر التعرف على آيدي العميل. يرجى عمل Reply على الهيدر الذي يحتوي على 🆔 ID:.", nil)
+					sendMessage(userID, "⚠️ تعذر استخراج آيدي العميل. اختر Reply على الهيدر الذي يحتوي على <code>🆔 ID:</code>.", nil)
 				}
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 		}
 
-		// تحويل رسائل ووسائط العملاء إلى المطور
-		if userID != adminID {
-			header := fmt.Sprintf("📩 <b>رسالة جديدة من العميل:</b>\n👤 <b>الاسم:</b> %s\n🆔 ID: <code>%d</code>", msg.From.FirstName, userID)
+		// التعامل مع رسائل العملاء -> توجيهها لكلا المشرفين 1 و 2
+		if !isAdmin(userID) {
+			header := fmt.Sprintf("📩 <b>رسالة جديدة من صراحة/سايت:</b>\n👤 <b>الاسم:</b> %s\n🆔 ID: <code>%d</code>", msg.From.FirstName, userID)
 			if msg.From.Username != "" {
 				header += fmt.Sprintf("\n🔗 <b>المعرف:</b> @%s", msg.From.Username)
 			}
-			if msg.MediaGroupID != "" {
-				header += "\n📦 <b>نوع المرفق:</b> ألبوم وسائط (Media Group)"
+
+			// إرسال التنبيه والرسالة لكل مشرف موجود بالقائمة
+			for _, adminID := range getAdmins() {
+				sendMessage(adminID, header, nil)
+				copyMessage(adminID, msg.Chat.ID, msg.MessageID)
 			}
 
-			// إرسال الهيدر مع أزرار التحكم
-			sendMessage(adminID, header, buildUserActionKeyboard(userID))
-
-			// نقل النص أو الميديا الخاصة بالعميل مع الحفاظ على التسميات والشكل الأصلي
-			copyMessage(adminID, msg.Chat.ID, msg.MessageID, nil)
-
-			// تأكيد الاستلام للعميل
-			sendMessage(userID, "✅ تم استلام رسالتك/وسائطك بنجاح، سيتم الرد عليك قريباً.", nil)
+			sendMessage(userID, "✅ تم إرسال رسالتك السرية بنجاح إلى الإدارة.", nil)
 		}
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
-func handleAdminCallbacks(cb *CallbackQuery, adminID int64) {
-	data := cb.Data
+func handleAdminNavigation(cb *CallbackQuery) {
+	chatID := cb.Message.Chat.ID
+	msgID := cb.Message.MessageID
 
-	switch {
-	case data == "status_active":
-		answerCallbackQuery(cb.ID, "🟢 البوت متصل ويدعم نقل الصور، الفيديوهات، الصوتیات، والملفات.")
-
-	case data == "media_info":
-		answerCallbackQuery(cb.ID, "للرد بأي وسائط (صورة، صوت، فيديو): اختر Reply على الهيدر وأرسل الميديا مباشرة.")
-
-	case strings.HasPrefix(data, "how_reply_"):
-		answerCallbackQuery(cb.ID, "قم بعمل Reply على الهيدر العلوي وأرسل إجابتك.")
-
-	case strings.HasPrefix(data, "info_"):
-		targetID := strings.TrimPrefix(data, "info_")
-		answerCallbackQuery(cb.ID, fmt.Sprintf("آيدي العميل: %s", targetID))
+	switch cb.Data {
+	case "nav_main":
+		editMessageText(chatID, msgID, getAdminHeader(), buildMainPanelKeyboard())
+	case "nav_content":
+		editMessageText(chatID, msgID, "<b>📝 قسم إدارة المحتوى:</b>", buildContentKeyboard())
+	case "nav_sub":
+		editMessageText(chatID, msgID, "<b>🔐 قسم إدارة الاشتراك الإجباري:</b>", buildSubscriptionKeyboard())
+	case "nav_settings":
+		editMessageText(chatID, msgID, "<b>⚙️ قسم إعدادات البوت:</b>", buildSettingsKeyboard())
+	case "nav_users":
+		editMessageText(chatID, msgID, "<b>👥 قسم إدارة المستخدمين والمسؤولين:</b>", buildUsersKeyboard())
+	case "nav_system":
+		editMessageText(chatID, msgID, "<b>🛠️ قسم النظام والدعم الفني:</b>", buildSystemKeyboard())
+	default:
+		answerCallbackQuery(cb.ID, "تم الضغط على الزر.")
 	}
 }
